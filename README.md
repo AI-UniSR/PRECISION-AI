@@ -5,7 +5,6 @@ Code companion for the manuscript:
 
 [![DOI](https://zenodo.org/badge/1279256693.svg)](https://doi.org/10.5281/zenodo.20832284)
 
-
 Reviewers should read this file alongside the *Methods & Results Codebook* to cross-check every analytical step against the corresponding script and parameter.
 
 ---
