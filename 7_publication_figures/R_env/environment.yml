@@ -1,0 +1,8 @@
+$schema: https://azuremlschemas.azureedge.net/latest/environment.schema.json
+name: r-publication-tables
+build:
+  path: .
+  dockerfile_path: Dockerfile
+description: |
+  R environment for publication-ready Word tables using flextable + officer.
+  Lightweight: only includes table-generation packages (no plotting/survival).
