@@ -3,6 +3,9 @@
 Code companion for the manuscript:
 **"Machine-learning ensemble for overall survival prediction in biliary tract cancer patients receiving cisplatin–gemcitabine–durvalumab (PRECISION-AI)"**
 
+[![DOI](https://zenodo.org/badge/1279256693.svg)](https://doi.org/10.5281/zenodo.20832284)
+
+
 Reviewers should read this file alongside the *Methods & Results Codebook* to cross-check every analytical step against the corresponding script and parameter.
 
 ---
