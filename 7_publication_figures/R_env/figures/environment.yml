@@ -1,0 +1,8 @@
+$schema: https://azuremlschemas.azureedge.net/latest/environment.schema.json
+name: r-dca-survival-calibration
+build:
+  path: .
+  dockerfile_path: Dockerfile
+description: |
+  R environment for the publication figures (decision curves, calibration, survival plots).
+  Packages are listed in the Dockerfile.

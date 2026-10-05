@@ -1,20 +1,19 @@
+"""Event-stratified bootstrap of the validation metrics.
+
+Each resample has the size of the cohort and keeps its number of events.
+Resample i is drawn with random_state = i, so every model compared on a
+cohort (ensemble, SENECA, Cox benchmark) is evaluated on the same resamples
+and differences between models are paired. Predictions are never refitted:
+the cached risk scores and survival curves are resampled with the patients.
+95% CIs are percentile intervals of the resampled values.
 """
-Bootstrap Utilities for Survival Analysis Validation
 
-Stratified resampling, per-iteration metric computation, CI aggregation,
-and paired statistical comparison (ML vs SENECA).
-
-Consolidated from the two identical copies of bootstrap_utils.py.
-"""
-
-import numpy as np
-import pandas as pd
 import logging
 from typing import Dict, List, Optional
 
-from scipy import stats
+import numpy as np
+import pandas as pd
 from sklearn.utils import resample
-
 from sksurv.metrics import (
     brier_score as sksurv_brier_score,
     integrated_brier_score as sksurv_integrated_brier_score,
@@ -32,28 +31,20 @@ from lib.survival_metrics import (
 
 logger = logging.getLogger(__name__)
 
+# Metrics for which the paired difference ensemble - Cox is kept for every resample
+PAIRED_DIFF_BASE_METRICS: List[str] = (
+    ["c_index", "c_index_ipcw", "mean_auc"]
+    + [f"auc_{int(t)}m" for t in CLINICAL_TIMEPOINTS_MONTHS]
+    + [f"brier_{int(t)}m" for t in CLINICAL_TIMEPOINTS_MONTHS]
+    + ["ibs_overall"]
+)
 
-def stratified_bootstrap_sample(
-    df: pd.DataFrame,
-    stratify_col: str = "event",
-    random_state: Optional[int] = None,
-) -> pd.DataFrame:
-    """
-    Generate a stratified bootstrap sample preserving event rate.
 
-    Uses ``sklearn.utils.resample`` with the ``stratify`` argument.
-    """
-    if stratify_col not in df.columns:
-        logger.warning(f"Column '{stratify_col}' not found; falling back to simple bootstrap.")
-        return resample(df, replace=True, n_samples=len(df), random_state=random_state)
-
-    return resample(
-        df,
-        replace=True,
-        n_samples=len(df),
-        stratify=df[stratify_col].values,
-        random_state=random_state,
-    )
+def stratified_bootstrap_sample(df: pd.DataFrame, stratify_col: str = "event",
+                                random_state: Optional[int] = None) -> pd.DataFrame:
+    """Resample of the rows of df with replacement, stratified on stratify_col."""
+    return resample(df, replace=True, n_samples=len(df), stratify=df[stratify_col].values,
+                    random_state=random_state)
 
 
 def compute_bootstrap_metrics(
@@ -65,38 +56,19 @@ def compute_bootstrap_metrics(
     surv_preds_ml: Optional[np.ndarray] = None,
     grid: Optional[np.ndarray] = None,
     horizon: Optional[float] = None,
+    risk_cox: Optional[np.ndarray] = None,
+    surv_preds_cox: Optional[np.ndarray] = None,
 ) -> Dict[str, float]:
-    """
-    Compute all survival metrics for one bootstrap iteration.
+    """All metrics of one resample.
 
-    Parameters
-    ----------
-    y_train : structured array
-        Training censoring distribution (for IPCW).
-    tte, event : arrays
-        Bootstrap-sample survival data.
-    risk_ml : array
-        ML risk scores for the bootstrap sample.
-    risk_seneca : array, optional
-        SENECA risk scores.  ``None`` skips SENECA metrics.
-    surv_preds_ml : np.ndarray, optional
-        Pre-computed S(t) matrix for ML (n_boot_samples × n_grid).
-        Required for Brier / IBS.
-    grid : np.ndarray, optional
-        Temporal grid corresponding to columns of *surv_preds_ml*.
-    horizon : float, optional
-        Evaluation horizon for IPCW truncation.
-
-    Returns
-    -------
-    dict with C-index (Harrell + Uno), time-dependent AUC, Brier at
-    clinical timepoints, IBS, and all pairwise differences.
+    Keys end in _ml (ensemble), _seneca or _cox; _diff is ensemble - SENECA and
+    _diff_ml_cox is ensemble - Cox. SENECA has no survival function, so it has
+    no Brier score or IBS. surv_preds_* are S(t) matrices (patients x grid).
     """
     y_boot = make_structured_array(event, tte)
+    tau = horizon if horizon is not None else CLINICAL_HORIZON_MONTHS
     metrics: Dict[str, float] = {}
-    eff_horizon = horizon if horizon is not None else CLINICAL_HORIZON_MONTHS
 
-    # ── Harrell's C-index ────────────────────────────────────────────
     try:
         metrics["c_index_ml"] = compute_c_index(y_boot, risk_ml)
     except Exception:
@@ -109,92 +81,69 @@ def compute_bootstrap_metrics(
             metrics["c_index_seneca"] = np.nan
             metrics["c_index_diff"] = np.nan
 
-    # ── Uno's C-index (IPCW) ────────────────────────────────────────
-    try:
-        metrics["c_index_ipcw_ml"] = compute_c_index_ipcw(
-            y_train, y_boot, risk_ml, tau=eff_horizon,
-        )
-    except Exception:
-        metrics["c_index_ipcw_ml"] = np.nan
+    metrics["c_index_ipcw_ml"] = compute_c_index_ipcw(y_train, y_boot, risk_ml, tau=tau)
     if risk_seneca is not None:
-        try:
-            metrics["c_index_ipcw_seneca"] = compute_c_index_ipcw(
-                y_train, y_boot, risk_seneca, tau=eff_horizon,
-            )
-            metrics["c_index_ipcw_diff"] = (
-                metrics["c_index_ipcw_ml"] - metrics["c_index_ipcw_seneca"]
-            )
-        except Exception:
-            metrics["c_index_ipcw_seneca"] = np.nan
-            metrics["c_index_ipcw_diff"] = np.nan
+        metrics["c_index_ipcw_seneca"] = compute_c_index_ipcw(y_train, y_boot, risk_seneca, tau=tau)
+        metrics["c_index_ipcw_diff"] = metrics["c_index_ipcw_ml"] - metrics["c_index_ipcw_seneca"]
 
-    # ── Time-dependent AUC (IPCW) ───────────────────────────────────
-    try:
-        auc_ml = compute_time_dependent_auc(y_train, y_boot, risk_ml)
-        for key, val in auc_ml.items():
-            metrics[f"{key}_ml"] = val
-    except Exception:
-        pass
+    metrics.update({f"{k}_ml": v for k, v in compute_time_dependent_auc(y_train, y_boot, risk_ml).items()})
     if risk_seneca is not None:
-        try:
-            auc_seneca = compute_time_dependent_auc(y_train, y_boot, risk_seneca)
-            for key, val in auc_seneca.items():
-                metrics[f"{key}_seneca"] = val
-            if "mean_auc_ml" in metrics and "mean_auc_seneca" in metrics:
-                metrics["mean_auc_diff"] = (
-                    metrics["mean_auc_ml"] - metrics["mean_auc_seneca"]
-                )
-        except Exception:
-            pass
+        metrics.update({f"{k}_seneca": v
+                        for k, v in compute_time_dependent_auc(y_train, y_boot, risk_seneca).items()})
+        if "mean_auc_ml" in metrics and "mean_auc_seneca" in metrics:
+            metrics["mean_auc_diff"] = metrics["mean_auc_ml"] - metrics["mean_auc_seneca"]
 
-    # ── Brier scores + IBS (IPCW, ML only — SENECA has no S(t)) ────
     if surv_preds_ml is not None and grid is not None:
+        metrics.update(_brier_ibs_metrics(y_train, y_boot, surv_preds_ml, grid, tau, "ml"))
+
+    if risk_cox is not None:
         try:
-            y_train_t = truncate_survival_times(y_train, eff_horizon)
-            y_boot_t = truncate_survival_times(y_boot, eff_horizon)
-            boot_max = float(y_boot_t["time"].max())
-            valid = (grid > 0) & (grid < boot_max)
-            g = grid[valid]
-            sp = surv_preds_ml[:, valid]
-
-            if len(g) >= 3:
-                for t in CLINICAL_TIMEPOINTS_MONTHS:
-                    idx = int(np.argmin(np.abs(g - t)))
-                    if np.abs(g[idx] - t) < 0.5:
-                        try:
-                            _, bs = sksurv_brier_score(
-                                y_train_t, y_boot_t, sp[:, idx], g[idx],
-                            )
-                            metrics[f"brier_{int(round(t))}m_ml"] = float(bs[0])
-                        except Exception:
-                            pass
-
-                try:
-                    ibs = sksurv_integrated_brier_score(
-                        y_train_t, y_boot_t, sp, g,
-                    )
-                    metrics["ibs_overall_ml"] = float(ibs)
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.debug(f"Brier/IBS failed in bootstrap: {e}")
-
+            metrics["c_index_cox"] = compute_c_index(y_boot, risk_cox)
+        except Exception:
+            metrics["c_index_cox"] = np.nan
+        metrics["c_index_ipcw_cox"] = compute_c_index_ipcw(y_train, y_boot, risk_cox, tau=tau)
+        metrics.update({f"{k}_cox": v for k, v in compute_time_dependent_auc(y_train, y_boot, risk_cox).items()})
+        if surv_preds_cox is not None and grid is not None:
+            metrics.update(_brier_ibs_metrics(y_train, y_boot, surv_preds_cox, grid, tau, "cox"))
+        for base in PAIRED_DIFF_BASE_METRICS:
+            if f"{base}_ml" in metrics and f"{base}_cox" in metrics:
+                metrics[f"{base}_diff_ml_cox"] = metrics[f"{base}_ml"] - metrics[f"{base}_cox"]
     return metrics
 
 
-def aggregate_bootstrap_results(
-    distributions: List[Dict[str, float]],
-    ci_level: float = 0.95,
-) -> Dict[str, Dict[str, float]]:
-    """
-    Aggregate bootstrap distributions → median, mean, 95 % CI.
+def _brier_ibs_metrics(y_train, y_boot, surv_preds, grid, tau, suffix) -> Dict[str, float]:
+    """Brier score at the time points and IBS on one resample (keys brier_{t}m_{suffix},
+    ibs_overall_{suffix}); grid points beyond the resample's follow-up are dropped."""
+    out: Dict[str, float] = {}
+    try:
+        y_train_t = truncate_survival_times(y_train, tau)
+        y_boot_t = truncate_survival_times(y_boot, tau)
+        valid = (grid > 0) & (grid < float(y_boot_t["time"].max()))
+        g, sp = grid[valid], surv_preds[:, valid]
+        if len(g) >= 3:
+            for t in CLINICAL_TIMEPOINTS_MONTHS:
+                idx = int(np.argmin(np.abs(g - t)))
+                if np.abs(g[idx] - t) < 0.5:
+                    try:
+                        _, bs = sksurv_brier_score(y_train_t, y_boot_t, sp[:, idx], g[idx])
+                        out[f"brier_{int(round(t))}m_{suffix}"] = float(bs[0])
+                    except Exception:
+                        pass
+            try:
+                out[f"ibs_overall_{suffix}"] = float(sksurv_integrated_brier_score(y_train_t, y_boot_t, sp, g))
+            except Exception:
+                pass
+    except Exception as e:
+        logger.debug(f"Brier/IBS not computed on this resample: {e}")
+    return out
 
-    Returns dict[metric_name → {mean, median, std, ci_lower, ci_upper, n_valid}].
-    """
+
+def aggregate_bootstrap_results(distributions: List[Dict[str, float]], ci_level: float = 0.95
+                                ) -> Dict[str, Dict[str, float]]:
+    """Mean, median, SD, percentile CI and number of valid resamples of every metric."""
     df = pd.DataFrame(distributions)
     alpha = (1 - ci_level) / 2
     aggregated: Dict[str, Dict[str, float]] = {}
-
     for col in df.columns:
         vals = df[col].dropna()
         if len(vals) == 0:
@@ -210,31 +159,3 @@ def aggregate_bootstrap_results(
             "n_valid": int(len(vals)),
         }
     return aggregated
-
-
-def compare_bootstrap_distributions(
-    dist_a: np.ndarray,
-    dist_b: np.ndarray,
-    test: str = "paired_t",
-) -> Dict[str, float]:
-    """
-    Test whether two paired bootstrap distributions differ significantly.
-
-    Parameters
-    ----------
-    dist_a, dist_b : 1-D arrays of bootstrap metric values.
-    test : 'paired_t' or 'wilcoxon'.
-    """
-    valid = ~(np.isnan(dist_a) | np.isnan(dist_b))
-    a, b = dist_a[valid], dist_b[valid]
-    if len(a) < 3:
-        return {"test": test, "statistic": np.nan, "p_value": np.nan, "n_pairs": 0}
-
-    if test == "paired_t":
-        stat, p = stats.ttest_rel(a, b)
-    elif test == "wilcoxon":
-        stat, p = stats.wilcoxon(a, b)
-    else:
-        raise ValueError(f"Unknown test: {test}")
-
-    return {"test": test, "statistic": float(stat), "p_value": float(p), "n_pairs": int(len(a))}
