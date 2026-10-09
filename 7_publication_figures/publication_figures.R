@@ -1,7 +1,8 @@
 #!/usr/bin/env Rscript
 # Figures of the temporal validation, from the outputs of compute_metrics.py.
 #
-#   Figure 2A-B  decision curves at 6 and 18 months (dca_supplementary_highlighted)
+#   Figure 2A-B  decision curves at 6 and 18 months, ensemble only (dca_main_highlighted;
+#                dca_supplementary_highlighted adds the Cox benchmark)
 #   Figure 2C-D  calibration at 6 and 18 months (calibration_combined_temporal)
 #   Fig. S3A-B   IPCW-weighted predicted risk by event status (ipcw_risk_stratified_*)
 #   Fig. S3C-D   predicted risk, internal vs temporal cohort (predicted_risk_*)
@@ -89,37 +90,70 @@ build_calibration_table <- function(df, pred_col, t_horizon, n_groups = 10) {
     mutate(difference = observed - mean_predicted, timepoint_months = t_horizon)
 }
 
-# Patients with known status at the horizon: death before it (1) or follow-up beyond it (0)
-make_horizon_labelable_data <- function(df, horizon, pred_col, eps = 1e-6) {
-  df %>%
-    transmute(tte = tte, event = event, pred = pmin(pmax(.data[[pred_col]], eps), 1 - eps),
-              outcome = case_when(event == 1 & tte <= horizon ~ 1, tte > horizon ~ 0, TRUE ~ NA_real_)) %>%
-    filter(!is.na(outcome)) %>%
-    mutate(lp = qlogis(pred))
+# Inverse probability of censoring weights at the horizon, as in lib/roc_pr.py:
+# deaths by the horizon weigh 1/G(T_i), patients followed beyond it 1/G(horizon),
+# patients censored before it 0; G is the Kaplan-Meier estimate of the censoring
+# distribution in the evaluated cohort.
+ipcw_weights_at <- function(tte, event, horizon) {
+  cens <- survfit(Surv(tte, 1 - event) ~ 1)
+  g_at <- function(t) {
+    u <- sort(unique(t))
+    summary(cens, times = u, extend = TRUE)$surv[match(t, u)]
+  }
+  w <- numeric(length(tte))
+  died <- event == 1 & tte <= horizon
+  alive <- tte > horizon
+  if (any(died)) w[died] <- 1 / g_at(tte[died])
+  if (any(alive)) w[alive] <- 1 / g_at(rep(horizon, sum(alive)))
+  w[!is.finite(w)] <- 0
+  w
+}
+
+# Calibration slope at the horizon: logistic regression of the status at the horizon
+# (death by it = 1, alive beyond it = 0) on the predicted log-odds, with the IPCW
+# weights above, so that patients censored before the horizon are accounted for
+# instead of dropped. 95% CI: percentile interval of event-stratified bootstrap
+# resamples of the cohort (weights re-estimated in every resample).
+calibration_slope_ipcw <- function(df, horizon, pred_col, n_boot = 1000, seed = 42, eps = 1e-6) {
+  fit_slope <- function(d) {
+    d$w <- ipcw_weights_at(d$tte, d$event, horizon)
+    d <- d[d$w > 0, ]
+    d$outcome <- as.integer(d$event == 1 & d$tte <= horizon)
+    d$lp <- qlogis(pmin(pmax(d[[pred_col]], eps), 1 - eps))
+    unname(coef(glm(outcome ~ lp, family = quasibinomial(), weights = w, data = d))["lp"])
+  }
+  estimate <- fit_slope(df)
+  set.seed(seed)
+  deaths <- which(df$event == 1)
+  censored <- which(df$event == 0)
+  boots <- vapply(seq_len(n_boot), function(i) {
+    fit_slope(df[c(deaths[sample.int(length(deaths), replace = TRUE)],
+                   censored[sample.int(length(censored), replace = TRUE)]), ])
+  }, numeric(1))
+  c(estimate = estimate, lower = unname(quantile(boots, 0.025)), upper = unname(quantile(boots, 0.975)))
 }
 
 # O:E = Kaplan-Meier observed risk at the horizon (all patients) / mean predicted risk,
 # 95% CI from the Greenwood SE on the log scale with the expected risk held fixed.
-# Calibration slope = logistic regression of the status on the predicted log-odds in
-# the patients with known status at the horizon, Wald 95% CI.
+# Slope: calibration_slope_ipcw above. Both use all patients of the cohort.
 compute_calibration_metrics <- function(df, horizon, pred_col) {
   z <- qnorm(0.975)
   km <- summary(survfit(Surv(tte, event) ~ 1, data = df), times = horizon, extend = TRUE)
   observed <- 1 - km$surv
   oe <- observed / mean(df[[pred_col]], na.rm = TRUE)
   se_log <- km$std.err / observed
-  dat <- make_horizon_labelable_data(df, horizon, pred_col)
-  out <- data.frame(timepoint_months = horizon, n_total = nrow(df), oe_km = round(oe, 4),
+  n_known <- sum((df$event == 1 & df$tte <= horizon) | df$tte > horizon)
+  out <- data.frame(timepoint_months = horizon, n_total = nrow(df), observed_km = round(observed, 4),
+                    mean_predicted = round(mean(df[[pred_col]], na.rm = TRUE), 4), oe_km = round(oe, 4),
                     oe_km_lower_95 = round(oe * exp(-z * se_log), 4),
-                    oe_km_upper_95 = round(oe * exp(z * se_log), 4), n_labelable = nrow(dat),
-                    slope = NA_real_, slope_lower_95 = NA_real_, slope_upper_95 = NA_real_)
-  if (nrow(dat) >= 5) {
-    fit <- glm(outcome ~ lp, family = binomial(), data = dat)
-    est <- unname(coef(fit)["lp"])
-    se <- unname(sqrt(diag(vcov(fit)))["lp"])
-    out$slope <- round(est, 4)
-    out$slope_lower_95 <- round(est - z * se, 4)
-    out$slope_upper_95 <- round(est + z * se, 4)
+                    oe_km_upper_95 = round(oe * exp(z * se_log), 4), n_labelable = n_known,
+                    slope = NA_real_, slope_lower_95 = NA_real_, slope_upper_95 = NA_real_,
+                    slope_method = "IPCW-weighted logistic recalibration; 95% CI from 1000 event-stratified bootstrap resamples")
+  if (n_known >= 5) {
+    s <- calibration_slope_ipcw(df, horizon, pred_col)
+    out$slope <- round(s[["estimate"]], 4)
+    out$slope_lower_95 <- round(s[["lower"]], 4)
+    out$slope_upper_95 <- round(s[["upper"]], 4)
   }
   out
 }
@@ -135,10 +169,10 @@ build_calibration_plot <- function(cal_tbl, cal_metrics, title, col = col_ml) {
     labs(title = title, x = "Predicted probability", y = "Observed probability (KM)") +
     theme_pub()
   if (!is.na(cal_metrics$slope[1])) {
-    lbl <- sprintf("O:E (KM) = %.2f [%.2f, %.2f], n = %d\nSlope = %.2f [%.2f, %.2f], n = %d",
+    lbl <- sprintf("O:E (KM) = %.2f [%.2f, %.2f]\nSlope (IPCW) = %.2f [%.2f, %.2f]\nn = %d",
                    cal_metrics$oe_km[1], cal_metrics$oe_km_lower_95[1], cal_metrics$oe_km_upper_95[1],
-                   cal_metrics$n_total[1], cal_metrics$slope[1], cal_metrics$slope_lower_95[1],
-                   cal_metrics$slope_upper_95[1], cal_metrics$n_labelable[1])
+                   cal_metrics$slope[1], cal_metrics$slope_lower_95[1], cal_metrics$slope_upper_95[1],
+                   cal_metrics$n_total[1])
     p <- p + annotate("text", x = 0.02, y = 0.95, label = lbl, hjust = 0, vjust = 1, size = 3,
                       family = "mono", color = "black")
   }
@@ -174,6 +208,7 @@ dca_colors <- scale_color_manual(values = c("Treat All" = "#F8766D", "Treat None
                                             "ML Ensemble" = "#619CFF", "Cox PH" = col_cox))
 dca_plots <- list()
 dca_plots_highlighted <- list()
+dca_main_plots <- list()
 for (tp in c(6, 18)) {
   pred_col <- paste0("p_event_", tp, "m")
   if (!(pred_col %in% names(cal_df))) next
@@ -193,11 +228,20 @@ for (tp in c(6, 18)) {
     labs(title = sprintf("%d Months", tp), x = "Threshold Probability", y = "Net Benefit") +
     scale_x_continuous(breaks = seq(0, 1, 0.2))
   hr <- highlight_ranges[[as.character(tp)]]
-  dca_plots_highlighted[[as.character(tp)]] <- base +
+  highlight_panel <- function(p) p +
     annotate("rect", xmin = hr[1], xmax = hr[2], ymin = -Inf, ymax = Inf, fill = "#87CEEB", alpha = 0.25) +
     labs(title = sprintf("%d Months", tp), x = "Threshold Probability", y = "Net Benefit",
          subtitle = sprintf("Highlighted range: %.0f%%–%.0f%%", hr[1] * 100, hr[2] * 100)) +
     scale_x_continuous(breaks = seq(0, 1, 0.1))
+  dca_plots_highlighted[[as.character(tp)]] <- highlight_panel(base)
+  # Figure 2A-B as published: the ensemble only (its net benefit does not depend on the other
+  # curves of the plot, so this is the same curve without the Cox benchmark)
+  base_ml <- if (length(vars) > 1) {
+    dca_ml <- dca(as.formula(sprintf("Surv(tte, event) ~ %s", pred_col)), data = cal_df, time = tp,
+                  thresholds = seq(0.01, 0.99, 0.01), label = labels[pred_col])
+    plot(dca_ml, smooth = TRUE) + coord_cartesian(ylim = c(-0.05, 0.50)) + dca_colors + theme_pub()
+  } else base
+  dca_main_plots[[as.character(tp)]] <- highlight_panel(base_ml)
 }
 if (length(dca_plots) == 2) {
   save_fig((dca_plots[["6"]] | dca_plots[["18"]]) +
@@ -206,6 +250,9 @@ if (length(dca_plots) == 2) {
   save_fig((dca_plots_highlighted[["6"]] | dca_plots_highlighted[["18"]]) +
              plot_annotation(title = "Decision curve analysis, clinically relevant ranges", theme = title_theme),
            "dca_supplementary_highlighted", w = 14, h = 6)
+}
+if (length(dca_main_plots) == 2) {
+  save_fig(dca_main_plots[["6"]] | dca_main_plots[["18"]], "dca_main_highlighted", w = 14, h = 6)
 }
 
 # ---- ROC and precision-recall curves (not in the paper) -----------------------

@@ -11,7 +11,7 @@ The analyses ran as two Azure Machine Learning pipelines: one for model developm
 ```
 1_preprocessing/        candidate predictors, missingness and correlation filters, 70/30 split
 2_feature_selection/    RSF stability selection
-3_model_training/       base learners (elastic-net Cox, RSF, XGBoost-AFT, XGBSE, DeepSurv)
+3_model_training/       base learners (elastic-net Cox, RSF, XGBoost-AFT, XGBSE) and the DeepSurv benchmark
 4_ensemble/             stacking ensemble, MLflow model, hold-out comparison of all models
 5_validation/           temporal validation: cohort, predictions, metrics, Cox benchmark,
                         cutoff sensitivity, SHAP; lib/ holds the shared metric code
@@ -35,13 +35,13 @@ The helper modules `xgboost_survival_model.py`, `xgbse_pipeline_wrapper.py` and 
 
 `data_prep.py` is run again to rebuild the same training and test sets.
 
-1. `prepare_external.py`: from the 779 temporal-cohort patients, removes the 80 also present in the development cohort (same date of birth, sex, centre and treatment start date) and 1 with zero follow-up, leaving 698, and keeps the ensemble's predictors and the SENECA inputs.
+1. `prepare_external.py`: from the 779 temporal-cohort patients, removes the 80 also present in the development cohort (same date of birth, sex, centre and treatment start date) and 1 with zero follow-up, leaving 698, and keeps the ensemble's predictors and the SENECA inputs. Its report also counts the temporal patients whose treatment started before, within or after the development cohort's treatment-start window and those from centres absent from the development cohort (Methods, Study cohort).
 2. `fit_cox_benchmark.py`: an unpenalised Cox model on the ensemble's ten predictors, fitted on the training set with the same preprocessing as the ensemble's Cox learner. It differs from the ensemble only in the modelling method.
 3. `generate_predictions.py`: risk scores and survival probabilities of the ensemble and of the Cox benchmark for the internal test set and the temporal cohort, the SENECA score, and the training risk scores used for the risk-group cutoffs.
-4. `compute_metrics.py`: Harrell's C, Uno's C (τ = 24 months), time-dependent AUC and Brier score at 6, 12, 18 and 24 months, IBS (definitions in `lib/survival_metrics.py`); 95% CIs from 1000 event-stratified bootstrap resamples, shared by all models compared on a cohort so that differences are paired (`lib/bootstrap.py`); the SENECA comparison on the 579 patients with all five SENECA inputs; risk groups at the 15th/85th (and 33rd/67th) percentiles of the training risk scores with Kaplan–Meier summaries, log-rank test, pairwise hazard ratios, PPV at 6 months and NPV at 18 months; completeness of the inputs and C-indices by completeness.
+4. `compute_metrics.py`: Harrell's C, Uno's C (τ = 24 months), time-dependent AUC and Brier score at 6, 12, 18 and 24 months, IBS, with the censoring distribution of the IPCW weights estimated by Kaplan–Meier in the cohort or bootstrap resample being evaluated (definitions in `lib/survival_metrics.py`); 95% CIs from 1000 event-stratified bootstrap resamples, shared by all models compared on a cohort so that differences are paired (`lib/bootstrap.py`); the SENECA comparison on the 579 patients with all five SENECA inputs; risk groups at the 15th/85th (and 33rd/67th) percentiles of the training risk scores with Kaplan–Meier summaries, log-rank test, pairwise hazard ratios, PPV at 6 months and NPV at 18 months; completeness of the inputs and C-indices by completeness.
 5. `threshold_sensitivity.py`: the risk-group analysis at other percentile cutoffs (k/100 − k, k = 5 to 33), on the SENECA complete cases (ensemble vs SENECA) and on the full cohort (ensemble). It reuses the resamples of `compute_metrics.py` (same `--n_bootstrap`) and stops unless k = 15 and k = 33 reproduce the main analysis.
 6. `shap_analysis.py`: Kernel SHAP of the ensemble risk score (background: 20 k-means centroids of the training set; 200 temporal-cohort patients, seed 42) and permutation importance (50 permutations per feature).
-7. `7_publication_figures/publication_figures.R` and `publication_tables.R` draw the figures and write the Word tables.
+7. `7_publication_figures/publication_figures.R` and `publication_tables.R` draw the figures and write the Word tables. The calibration summary of the Results (6 and 18 months) is computed in `publication_figures.R` on all patients of the temporal cohort: the O:E ratio is the Kaplan–Meier observed risk at the horizon over the mean predicted risk (Greenwood CI), and the calibration slope is the coefficient of the predicted log-odds in a logistic regression of the status at the horizon weighted by inverse probability of censoring weights (percentile CI from 1000 event-stratified bootstrap resamples).
 
 ## Paper items
 
@@ -50,17 +50,17 @@ The helper modules `xgboost_survival_model.py`, `xgbse_pipeline_wrapper.py` and 
 | Table 2 | `compute_metrics.py` → `publication_tables.R` | `overall_internal.csv`, `overall_temporal_full.csv` |
 | Table 3 | `compute_metrics.py` → `publication_tables.R` | `timedep_temporal_full.csv` |
 | Table 4 | `compute_metrics.py` → `publication_tables.R` | `overall_temporal_cc.csv` |
-| Figure 2 | `publication_figures.R` | `dca_supplementary_highlighted`, `calibration_combined_temporal` |
-| Calibration (Results) | `publication_figures.R` | `calibration_metrics_{6,18}m_temporal.csv` |
-| Figure 3, Table S4 | `compute_metrics.py` | `km_15-85_temporal`, `km_statistics_temporal_15-85.csv`, `hazard_ratios_temporal_15-85.csv`, `ppv_npv_temporal_15-85.csv` |
-| Figure 4 | `shap_analysis.py` | `shap_beeswarm` |
+| Figure 2 | `publication_figures.R` | `dca_main_highlighted` (A–B, ensemble only; `dca_supplementary_highlighted` adds the Cox benchmark), `calibration_combined_temporal` (C–D) |
+| Calibration (Results) | `publication_figures.R` | `calibration_metrics_{6,18}m_temporal.csv` (`observed_km`, `mean_predicted`, `oe_km`, `slope` and their 95% CIs) |
+| Figure 3, Table S4 | `compute_metrics.py` | `km_15-85_temporal`, `km_statistics_temporal_15-85.csv`, `hazard_ratios_temporal_15-85.csv`, `logrank_temporal_15-85.csv`, `ppv_npv_temporal_15-85.csv` |
+| Figure 4 | `shap_analysis.py` | `shap_beeswarm`, `shap_mean_abs.csv` |
 | Table S2 | `4_ensemble/evaluate_models.py` | `comparison/summary_metrics.csv` |
 | Tables S7, S8, S9 | `compute_metrics.py` | `temporal_patient_completeness.csv`, `temporal_ml_completeness_c_indices.csv`, `temporal_centre_feature_missingness.csv` |
 | Fig. S2 | `2_feature_selection/feature_selection.py` | `stability_scores.csv` |
 | Fig. S3 | `publication_figures.R` | `ipcw_risk_stratified_*`, `predicted_risk_*` |
 | Cox benchmark, cutoff sensitivity | `fit_cox_benchmark.py`, `compute_metrics.py`, `threshold_sensitivity.py` → `publication_tables.R` | `ensemble_vs_cox`, `cox_benchmark_coefficients`, `cutoff_sensitivity_temporal_full` |
 
-Table 1, Tables S1, S3, S5 and S6, Figs. S1, S4 and S5 and Figures 1 and 5 were prepared outside these pipelines; the published figures were assembled from the panels above. Table S9 was de-identified by hand: pipeline outputs contain patient-level rows and real centre names.
+Table 1, Tables S1, S3, S5 and S6, Figs. S1, S4 and S5 and Figures 1 and 5 were prepared outside these pipelines; the published figures were assembled from the panels above. Table S9 was de-identified by hand: pipeline outputs contain patient-level rows and real centre names. Tables 2–4 and S4 as printed show the ensemble (and SENECA) rows only: the Cox benchmark rows that `publication_tables.R` adds to them were removed by hand, and the benchmark is reported in Table S11 (temporal validation cohort). The summary CSVs are written with four decimals, as in the run behind the paper; the published three-decimal values are rounded from them.
 
 ## Running
 
@@ -73,3 +73,7 @@ When the published model was trained, the Optuna searches of `cox_net` and `deep
 ## Software
 
 Python 3.9. The registered model was logged with scikit-learn 1.5.1, scikit-survival 0.23.0, xgbse 0.3.3, mlflow 2.22.2, numpy 1.26.4, pandas 2.3.3, scipy 1.13.1 and cloudpickle 2.2.1; other packages used: lifelines, xgboost, optuna, feature-engine, shap, plotly, matplotlib. DeepSurv also needs torch, pycox and torchtuples. The R scripts use R 4.4.3; their environments are defined in `7_publication_figures/R_env/figures` and `R_env/tables`.
+
+## Archive and citation
+
+The repository is archived on Zenodo. The DOI [10.5281/zenodo.20832284](https://doi.org/10.5281/zenodo.20832284) refers to all versions and resolves to the latest one. Release v1.0.0 (DOI 10.5281/zenodo.20832285) predates the revision of the code for the manuscript and does not reproduce its numbers; use release v1.1.0 or later.

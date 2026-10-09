@@ -17,7 +17,9 @@ unparseable dates, removed before this step).
 
 Also logged to MLflow: the removed patients, the combined analysis dataset of
 both cohorts (735 + 698 patients), the date ranges of the two cohorts and the
-centres of each.
+centres of each. The report also counts the temporal patients whose treatment
+started before, within or after the development cohort's treatment-start window
+and those from centres absent from the development cohort (Methods, Study cohort).
 """
 
 import argparse
@@ -98,6 +100,36 @@ def centre_comparison(df_train: pd.DataFrame, df_val: pd.DataFrame) -> pd.DataFr
     return table
 
 
+def temporal_overlap_counts(df_train: pd.DataFrame, df_val: pd.DataFrame) -> dict:
+    """Temporal patients by CGI start date relative to the development cohort's treatment-start
+    window (before / within / after) and by centre (label also in the development cohort vs
+    new); counts only, no centre names (Methods, Study cohort)."""
+    dev_start = parse_dates(df_train["cgi start date"])
+    val_start = parse_dates(df_val["cgi start date"])
+    lo, hi = dev_start.min(), dev_start.max()
+    before, after = val_start < lo, val_start > hi
+    within = val_start.notna() & ~before & ~after
+    dev_centres = set(df_train["center"].astype(str).str.strip().str.lower()) - {"", "nan"}
+    val_centres = df_val["center"].astype(str).str.strip().str.lower()
+    from_dev = val_centres.isin(dev_centres)
+    out = {
+        "n_temporal_final": int(len(df_val)),
+        "development_cgi_start_min": str(lo.date()),
+        "development_cgi_start_max": str(hi.date()),
+        "temporal_cgi_start_min": str(val_start.min().date()),
+        "temporal_cgi_start_max": str(val_start.max().date()),
+        "temporal_start_before_development_window": int(before.sum()),
+        "temporal_start_within_development_window": int(within.sum()),
+        "temporal_start_after_development_window": int(after.sum()),
+        "temporal_start_unparseable": int(val_start.isna().sum()),
+        "temporal_patients_development_centres": int(from_dev.sum()),
+        "temporal_patients_new_centres": int((~from_dev).sum()),
+        "temporal_centre_labels_new": int(len(set(val_centres[~from_dev]) - {"", "nan"})),
+    }
+    logger.info(f"Temporal overlap counts: {out}")
+    return out
+
+
 def model_features(model_name: str, model_version: str) -> list:
     """Union of the base learners' features (selected_features.json of the registered model)."""
     path = mlflow.artifacts.download_artifacts(
@@ -137,6 +169,7 @@ def main():
     invalid |= df["tte"] <= 0
     logger.info(f"Missing or non-positive follow-up: {int(invalid.sum())} patients removed")
     df = df[~invalid].reset_index(drop=True)
+    overlap = temporal_overlap_counts(df_train, df)
 
     # Analysis dataset of both cohorts, before any recoding (used for Table 1)
     pd.concat([df_train, df], ignore_index=True).to_csv(artifacts / "btc_dataset_selected_patients.csv",
@@ -176,6 +209,7 @@ def main():
         "dedup_validation_after": n_after_dedup,
         "dedup_patients_removed": n_before - n_after_dedup,
         "features": feature_cols,
+        "temporal_overlap": overlap,
     }
     Path(args.output_report).parent.mkdir(parents=True, exist_ok=True)
     with open(args.output_report, "w") as f:

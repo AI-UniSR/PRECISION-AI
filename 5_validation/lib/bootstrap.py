@@ -5,7 +5,9 @@ Resample i is drawn with random_state = i, so every model compared on a
 cohort (ensemble, SENECA, Cox benchmark) is evaluated on the same resamples
 and differences between models are paired. Predictions are never refitted:
 the cached risk scores and survival curves are resampled with the patients.
-95% CIs are percentile intervals of the resampled values.
+95% CIs are percentile intervals of the resampled values. The censoring
+distribution of the IPCW metrics is re-estimated on every resample
+(lib/survival_metrics.py); y_train sets the evaluation horizon only.
 """
 
 import logging
@@ -113,10 +115,10 @@ def compute_bootstrap_metrics(
 
 def _brier_ibs_metrics(y_train, y_boot, surv_preds, grid, tau, suffix) -> Dict[str, float]:
     """Brier score at the time points and IBS on one resample (keys brier_{t}m_{suffix},
-    ibs_overall_{suffix}); grid points beyond the resample's follow-up are dropped."""
+    ibs_overall_{suffix}); grid points beyond the resample's follow-up are dropped.
+    The censoring distribution is estimated on the resample; y_train is unused."""
     out: Dict[str, float] = {}
     try:
-        y_train_t = truncate_survival_times(y_train, tau)
         y_boot_t = truncate_survival_times(y_boot, tau)
         valid = (grid > 0) & (grid < float(y_boot_t["time"].max()))
         g, sp = grid[valid], surv_preds[:, valid]
@@ -125,12 +127,12 @@ def _brier_ibs_metrics(y_train, y_boot, surv_preds, grid, tau, suffix) -> Dict[s
                 idx = int(np.argmin(np.abs(g - t)))
                 if np.abs(g[idx] - t) < 0.5:
                     try:
-                        _, bs = sksurv_brier_score(y_train_t, y_boot_t, sp[:, idx], g[idx])
+                        _, bs = sksurv_brier_score(y_boot_t, y_boot_t, sp[:, idx], g[idx])
                         out[f"brier_{int(round(t))}m_{suffix}"] = float(bs[0])
                     except Exception:
                         pass
             try:
-                out[f"ibs_overall_{suffix}"] = float(sksurv_integrated_brier_score(y_train_t, y_boot_t, sp, g))
+                out[f"ibs_overall_{suffix}"] = float(sksurv_integrated_brier_score(y_boot_t, y_boot_t, sp, g))
             except Exception:
                 pass
     except Exception as e:

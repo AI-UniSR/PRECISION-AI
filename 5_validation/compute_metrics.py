@@ -19,8 +19,8 @@ internal test set and the temporal validation cohort:
 
 Paper items: Tables 2-4 (overall_*, timedep_* files), Figure 3 and Table S4
 (km_statistics_temporal_15-85, hazard_ratios_temporal_15-85,
-ppv_npv_temporal_15-85, Kaplan-Meier figure), Tables S7-S9 (completeness and
-missingness files). The Cox-benchmark results are in the same files, under
+logrank_temporal_15-85, ppv_npv_temporal_15-85, Kaplan-Meier figure), Tables
+S7-S9 (completeness and missingness files). The Cox-benchmark results are in the same files, under
 keys and columns marked 'cox' and rows with model == "Cox".
 """
 
@@ -250,10 +250,11 @@ def _evaluate_stratification(y, risk_scores, thresholds, scheme_name) -> Dict:
 
 def _write_stratification(result, df, y, tag, scheme_label, tables_dir, r_input_dir, km_figures_dir,
                           km_title_scheme=None, km_title_cohort=None) -> None:
-    """Kaplan-Meier summary, HRs, PPV/NPV, patient-level groups and the KM figure."""
+    """Kaplan-Meier summary, HRs, log-rank test, PPV/NPV, patient-level groups and the KM figure."""
     result["km_statistics"].to_csv(tables_dir / f"km_statistics_{tag}.csv", index=False)
     if not result["pairwise_hr"].empty:
         result["pairwise_hr"].to_csv(tables_dir / f"hazard_ratios_{tag}.csv", index=False)
+    pd.DataFrame([result["logrank"]]).to_csv(tables_dir / f"logrank_{tag}.csv", index=False)
     pd.DataFrame([result["ppv_npv"]]).to_csv(tables_dir / f"ppv_npv_{tag}.csv", index=False)
     cohort = km_title_cohort or tag
     pd.DataFrame({"tte": df["tte"].values, "event": df["event"].values.astype(int),
@@ -286,7 +287,6 @@ def _km_figure(groups, y, scheme_name, cohort, output_dir: Path) -> None:
     ax.set_xticks([6, 12, 18, 24])
     ax.set_xlabel("Time (months)", fontweight="bold")
     ax.set_ylabel("Survival probability", fontweight="bold")
-    ax.set_title(f"{scheme_name} — {cohort}", fontweight="bold", fontsize=13)
     ax.legend(loc="lower left", frameon=False)
     if fitters:
         add_at_risk_counts(*fitters, ax=ax, rows_to_show=["At risk", "Censored"])
@@ -754,6 +754,8 @@ def main():
                                       "metric": row_metric, "point_estimate": value,
                                       "ci_lower": ci.get("ci_lower"), "ci_upper": ci.get("ci_upper"),
                                       "n_valid_bootstrap": ci.get("n_valid")})
+    # Summary tables are written with four decimals, as in the run behind the paper; the
+    # published three-decimal values are rounded from these files (publication_tables.R).
     pd.DataFrame(subgroup_rows).to_csv(tables_dir / "temporal_ml_completeness_c_indices.csv", index=False,
                                        float_format="%.4f")
     _write_json(subgroup_rows, metrics_dir / "temporal_ml_completeness_c_indices.json")
@@ -902,8 +904,8 @@ def main():
          perf_temporal_cox_cc),
     ]:
         cohort = name.split("_", 1)[1]
-        builder(perf_ml, perf_sen, agg, cohort, perf_cox=perf_cox).to_csv(
-            tables_dir / f"{name}.csv", index=False, float_format="%.4f")
+        builder(perf_ml, perf_sen, agg, cohort, perf_cox=perf_cox).to_csv(tables_dir / f"{name}.csv", index=False,
+                                                                         float_format="%.4f")
 
     n_cc = int(cc_mask.sum())
     _performance_summary([

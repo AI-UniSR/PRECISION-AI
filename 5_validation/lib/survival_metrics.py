@@ -2,8 +2,15 @@
 
 Conventions (times in months):
 
-- The censoring distribution of every IPCW estimator (Uno's C, time-dependent
-  AUC, Brier score) is estimated on the training set.
+- The censoring distribution G(t) of every IPCW estimator (Uno's C, time-dependent
+  AUC, Brier score, IBS) is estimated by Kaplan-Meier in the cohort being evaluated
+  (internal test set, temporal cohort, subgroup or bootstrap resample), not on the
+  training set (changed 9 Oct 2026). The temporal cohort comes from a later registry
+  data freeze with shorter follow-up (median 10.1 vs 18.0 months), so training-set
+  weights under-weighted the patients followed beyond the horizon and biased the
+  Brier score and IBS downwards and the AUC and Uno's C upwards. G(t) describes the
+  evaluation data, not the model, so estimating it there involves no leakage. The
+  training set still sets the time grid and the evaluation horizon.
 - Follow-up is truncated at the evaluation horizon tau = min(24 months,
   maximum training follow-up, maximum follow-up of the evaluated cohort):
   later times are censored at tau. Uno's C uses tau = 24 months.
@@ -93,10 +100,11 @@ def compute_c_index(y: np.ndarray, risk_scores: np.ndarray) -> float:
 
 def compute_c_index_ipcw(y_train: np.ndarray, y_test: np.ndarray, risk_scores: np.ndarray,
                          tau: float = CLINICAL_HORIZON_MONTHS) -> float:
-    """Uno's C-index truncated at tau (NaN if not computable)."""
+    """Uno's C-index truncated at tau (NaN if not computable). The censoring distribution is
+    estimated in the evaluated sample y_test (module docstring); y_train is kept for the callers."""
+    y_test_t = truncate_survival_times(y_test, tau)
     try:
-        return concordance_index_ipcw(truncate_survival_times(y_train, tau),
-                                      truncate_survival_times(y_test, tau), risk_scores, tau=tau)[0]
+        return concordance_index_ipcw(y_test_t, y_test_t, risk_scores, tau=tau)[0]
     except Exception as e:
         logger.error(f"Uno's C-index not computed: {e}")
         return float("nan")
@@ -104,7 +112,8 @@ def compute_c_index_ipcw(y_train: np.ndarray, y_test: np.ndarray, risk_scores: n
 
 def compute_time_dependent_auc(y_train: np.ndarray, y_test: np.ndarray, risk_scores: np.ndarray,
                                time_points: Optional[List[float]] = None) -> Dict[str, float]:
-    """Cumulative/dynamic AUC at each time point and the mean AUC (keys auc_{t}m, mean_auc)."""
+    """Cumulative/dynamic AUC at each time point and the mean AUC (keys auc_{t}m, mean_auc).
+    Censoring distribution from y_test; y_train sets the evaluation horizon only."""
     if time_points is None:
         time_points = CLINICAL_TIMEPOINTS_MONTHS
     _, _, horizon = create_temporal_grid(y_train, y_test)
@@ -113,8 +122,8 @@ def compute_time_dependent_auc(y_train: np.ndarray, y_test: np.ndarray, risk_sco
     if not pairs:
         return {}
     try:
-        auc, mean_auc = cumulative_dynamic_auc(truncate_survival_times(y_train, horizon),
-                                               truncate_survival_times(y_test, horizon), risk_scores,
+        y_test_t = truncate_survival_times(y_test, horizon)
+        auc, mean_auc = cumulative_dynamic_auc(y_test_t, y_test_t, risk_scores,
                                                np.array([p[1] for p in pairs]))
     except Exception as e:
         logger.error(f"Time-dependent AUC not computed: {e}")
@@ -149,16 +158,16 @@ def predict_survival_matrix(model, X: pd.DataFrame, grid: np.ndarray) -> Optiona
 
 def compute_brier_scores(model, X_test: pd.DataFrame, y_train: np.ndarray, y_test: np.ndarray
                          ) -> Dict[str, float]:
-    """Brier score at the time points and IBS (keys brier_{t}m, ibs_{a}_{b}m, ibs_overall)."""
+    """Brier score at the time points and IBS (keys brier_{t}m, ibs_{a}_{b}m, ibs_overall).
+    Censoring distribution from y_test; y_train sets the time grid and the horizon."""
     grid, clinical, horizon = create_temporal_grid(y_train, y_test)
     if len(grid) == 0:
         return {}
     preds = predict_survival_matrix(model, X_test, grid)
     if preds is None:
         return {}
-    y_train_t = truncate_survival_times(y_train, horizon)
     y_test_t = truncate_survival_times(y_test, horizon)
-    brier = np.array([sksurv_brier_score(y_train_t, y_test_t, preds[:, i], t)[1][0]
+    brier = np.array([sksurv_brier_score(y_test_t, y_test_t, preds[:, i], t)[1][0]
                       for i, t in enumerate(grid)])
 
     results: Dict[str, float] = {}

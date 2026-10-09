@@ -199,8 +199,10 @@ save_docx(flextable(calibration) %>% merge_v(j = 1) %>% style_table(),
           file.path(supp_dir, "calibration_summary.docx"),
           "Calibration of the final ML ensemble and the Cox PH benchmark in temporal validation",
           paste("O:E = observed-to-expected ratio: Kaplan-Meier observed risk at the horizon (all patients) over",
-                "the mean predicted risk; 95% CI from the Greenwood standard error. Calibration slope from",
-                "logistic recalibration on patients with known status at the horizon (Wald CI).", cox_def_note))
+                "the mean predicted risk; 95% CI from the Greenwood standard error. Calibration slope: logistic",
+                "regression of the status at the horizon on the predicted log-odds, weighted by inverse probability",
+                "of censoring weights (censoring distribution estimated by Kaplan-Meier in the temporal cohort);",
+                "95% CI from 1000 event-stratified bootstrap resamples.", cox_def_note))
 
 # ---- Table S4: risk groups at the 15th/85th percentiles -------------------------
 
@@ -306,7 +308,8 @@ cmp_footnote <- paste(
   "on the risk score (ML ensemble) and on the linear predictor (Cox PH). AUC: cumulative/dynamic IPCW AUC at 6, 12,",
   "18 and 24 months; mean time-dependent AUC: its survival-weighted mean over these four time points. Integrated",
   "Brier score: IPCW Brier score of the predicted survival curves integrated over the evaluation time grid up to",
-  "24 months; lower is better. Censoring weights are estimated on the training set.",
+  "24 months; lower is better. Censoring weights are estimated in the evaluation cohort (Kaplan-Meier),",
+  "re-estimated in every bootstrap resample.",
   sprintf(paste("95%% CIs: percentile intervals from %s event-stratified bootstrap resamples of the cohort.",
                 "Δ = ML ensemble − Cox PH; its 95%% CI comes from the paired differences, both models",
                 "being evaluated on the same resamples. * 95%% CI of Δ excludes 0."), boot_temporal$n_iterations),

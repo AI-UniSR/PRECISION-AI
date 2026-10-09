@@ -10,6 +10,8 @@
   when one feature is permuted, 50 permutations per feature; mean, SD and
   2.5-97.5 percentiles over the permutations.
 
+Outputs: figures/{png,pdf}/shap_beeswarm and pfi_importance, shap_mean_abs.csv
+(feature order of the beeswarm) and pfi_importance.csv.
 The ensemble is loaded from the MLflow registry (models:/<name>/<version>).
 """
 
@@ -156,6 +158,10 @@ def main():
     explanation = compute_shap(model, X_train.columns, X_train, X_val, k=args.background_samples,
                                n_explained=args.display_samples, seed=args.random_state)
     save_beeswarm(explanation, png_dir, pdf_dir, max_display=args.max_display_features)
+    # Feature order of the beeswarm (Figure 4 legend): mean |SHAP| over the explained patients
+    pd.DataFrame({"feature": list(explanation.feature_names),
+                  "mean_abs_shap": np.abs(np.asarray(explanation.values)).mean(axis=0)}).sort_values(
+        "mean_abs_shap", ascending=False).to_csv(out / "shap_mean_abs.csv", index=False)
     pfi = compute_pfi(model, X_train.columns, X_val, y_val, n_repeats=args.pfi_repeats, seed=args.random_state)
     save_pfi_plot(pfi, png_dir, pdf_dir)
     pfi.to_csv(out / "pfi_importance.csv", index=False)
