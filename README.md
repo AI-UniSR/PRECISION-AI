@@ -76,4 +76,4 @@ Python 3.9. The registered model was logged with scikit-learn 1.5.1, scikit-surv
 
 ## Archive and citation
 
-The repository is archived on Zenodo. The DOI [10.5281/zenodo.20832284](https://doi.org/10.5281/zenodo.20832284) refers to all versions and resolves to the latest one. Release v1.0.0 (DOI 10.5281/zenodo.20832285) predates the revision of the code for the manuscript and does not reproduce its numbers; use release v1.1.0 or later.
+The repository is archived on Zenodo. The DOI [10.5281/zenodo.20832284](https://doi.org/10.5281/zenodo.20832284) refers to all versions and resolves to the latest one. The code of the submitted manuscript is release v1.1.0, DOI [10.5281/zenodo.23268671](https://doi.org/10.5281/zenodo.23268671). Release v1.0.0 (DOI 10.5281/zenodo.20832285) predates the revision of the code for the manuscript and does not reproduce its numbers.
