@@ -4,7 +4,85 @@ Analysis code for the paper *Development and Temporal Validation of an Artificia
 
 [![DOI](https://zenodo.org/badge/1279256693.svg)](https://doi.org/10.5281/zenodo.20832284)
 
-The analyses ran as two Azure Machine Learning pipelines: one for model development and internal testing, one for temporal validation. This repository holds the scripts of both pipelines, so that each step of the Methods can be checked against the code. Patient-level data cannot be shared, so the scripts cannot be run as they are; the order of the steps and their settings are described below and in each script's header. Exploratory steps that produced no reported result, the Azure job definitions and the checks that compared each run with our reference outputs are not included.
+The analyses ran as two Azure Machine Learning pipelines: one for model development and internal testing, one for temporal validation. This repository holds the scripts of both pipelines, so that each step of the Methods can be checked against the code. Patient-level data cannot be shared, so the scripts cannot be run as they are; the format of the input is described in [Input data format](#input-data-format), the order of the steps and their settings below and in each script's header. Exploratory steps that produced no reported result, the Azure job definitions and the checks that compared each run with our reference outputs are not included.
+
+## Input data format
+
+The pipelines read a data dictionary and two CSV files of patients. This section describes them, so that the code can be run on other data.
+
+### Files
+
+| File | Read by | Content |
+|---|---|---|
+| Data dictionary (CSV) | `1_preprocessing/data_prep.py --dict_data` | one row per study variable |
+| Development cohort (CSV) | `1_preprocessing/data_prep.py --btc_os_data` | one row per development patient |
+| Both cohorts (CSV) | `5_validation/prepare_external.py --raw_data` | development patients (`coorte` = `training`) and temporal patients (`coorte` = `validation`) |
+
+The later steps read the files written by these two scripts (`data_prep.py`: the training and test CSV, with the columns `id`, the predictors, `tte` and `event`; `prepare_external.py`: `prepared_external.parquet`) and need no further input.
+
+### General rules
+
+- One row per patient, one column per variable, comma-separated, with a header. Column names are case-sensitive and are the ones listed below.
+- Missing values are empty cells. Do not impute: the models impute inside each fold (Methods).
+- Every predictor is numeric: binary variables are 0/1 and categories integer codes. Text columns (dates, `center`) are not predictors.
+- Follow-up is in months; the outcome is overall survival from the start of first-line treatment (CGI).
+- Units matter for the SENECA score: neutrophils in 10^9/L, CA19-9 in U/mL (cut-off 1051) and CEA in ng/mL (cut-off 3.80). The study used albumin in g/dL, BMI in kg/m², AST and ALT in U/L.
+
+### Data dictionary
+
+One row per variable, with the columns `FieldShortName` (name of the column in the patient files), `Category` (free text) and `RecordedAtBaseline` (`Yes` or `No`).
+
+| FieldShortName | Category | RecordedAtBaseline |
+|---|---|---|
+| patient number | identifier | Yes |
+| albumin | laboratory | Yes |
+| fgfr2 fusion | genetic_tests | Yes |
+| date of death or last fup | dates | No |
+
+The candidate predictors are the variables with `RecordedAtBaseline` = `Yes`, except `center` and the categories `genetic_tests`, `comorbidity_type`, `drug_type` and `comorbidity_info`. Names in the dictionary that are not columns of the patient file are ignored. `patient number` must be listed as a baseline variable.
+
+### Development cohort file
+
+| Column | Content | Notes |
+|---|---|---|
+| `patient number` | numeric, unique | required; becomes `id` |
+| `os` | follow-up in months, > 0 | required; becomes `tte` |
+| `death` | 1 death, 0 censored | required; becomes `event` |
+| `location` | 0 gallbladder, 1 intrahepatic, 2 distal, 3 proximal extrahepatic | required; recoded to `location - Intrahepatic` |
+| `surgery and start of cgi` | 0 <6 months, 1 >6 months, 2 metastatic ab initio | required; recoded to `surgery and start of cgi - Metastatic ab initio` |
+| `hbv/hcv` | any | required; dropped |
+| `ps ecog`, `ecog bin` | ECOG 0-3; 0 vs ≥1 | if both are present, `ecog bin` replaces `ps ecog` |
+| `stent or biliary draige` | 0 none, 1-3 stent, drainage or both | optional; recoded to 0/1 |
+| `lung mets only`, `lymph mets only`, `peri mets only`, `liver mets only`, `bone mets only` | 0/1 | optional; dropped |
+| every other baseline variable of the dictionary | numeric | e.g. `neutrophils`, `nlr`, `albumin`, `cea`, `ca199`, `bmi`, `astGOT`, `altGPT`, `number of met sites`, `locally advanced/metastatic` |
+
+`data_prep.py` then drops the variables with more than 30% missing values and, from each group with Spearman |ρ| > 0.8, all but the variable with the largest variance, and splits 70/30 on the event.
+
+### File with both cohorts
+
+The columns of the development file, for both cohorts, with `coorte` (`training` or `validation`) and, for every patient:
+
+| Column | Content | Notes |
+|---|---|---|
+| `coorte` | `training` or `validation` | required |
+| `dob` | date of birth | `YYYY-MM-DD` or `DD/MM/YYYY` |
+| `sex` | numeric code | |
+| `center` | text | upper/lower case and spaces are ignored |
+| `cgi start date` | start of first-line treatment | `YYYY-MM-DD` or `DD/MM/YYYY` |
+| `date of death or last fup` | date | `YYYY-MM-DD` or `DD/MM/YYYY` |
+| `death` | 1 death, 0 censored | |
+
+The follow-up of the temporal patients is recomputed from the two dates (months of 365.25/12 days); `os` is not used for them. A temporal patient is removed if date of birth, sex, centre and start date equal those of a development patient, or if the follow-up is missing or not positive. The columns of the ensemble's predictors and the SENECA inputs (`neutrophils`, `ps ecog`, `locally advanced/metastatic`, `ca199`, `cea`; stage 1 locally advanced, 2 metastatic) must have the same names and codes as in the development data.
+
+### Requirements of the code
+
+These are not visible from the file format:
+- The number of predictors of the ensemble, the union of the features of the four base learners, is the result of the selection, not an input: 10 in the paper, and any number from 1 upwards is accepted (tested with 10 and 24). `prepare_external.py` and the Cox benchmark use whatever list the registered ensemble holds.
+- The temporal cohort is recoded only for ECOG and stent/drainage, so the predictors of the ensemble must be columns that `data_prep.py` passes through unchanged; the derived `location - Intrahepatic` and `surgery and start of cgi - Metastatic ab initio` cannot be among them.
+- The five SENECA inputs must also be candidate predictors of the development data: `threshold_sensitivity.py` reads them from the training set.
+- The R scripts evaluate the calibration at 6 and 18 months within deciles of predicted risk, and stop ("no points selected for one or more curves") if a decile has no patient followed beyond 18 months; the temporal cohort needs enough follow-up and patients.
+- `threshold_sensitivity.py` compares its rows at k = 15 and k = 33 with the main analysis and stops if they differ; this also happens when a risk group has no deaths, because the hazard ratio is then infinite (small cohorts).
+- MLflow creates its store (`MLFLOW_TRACKING_URI=file:<folder>`) itself; a folder created beforehand makes it stop with "Could not find experiment with ID 0".
 
 ## Contents
 
@@ -69,29 +147,6 @@ Each step is a command-line program (`--help` lists the arguments); the numeric 
 The ensemble is passed between steps through an MLflow model registry as `models:/<name>/<version>`. Outside Azure ML, set `MLFLOW_TRACKING_URI` to a local store (e.g. `file:./mlruns`), where `evaluate_models.py` registers it as `ensemble_survival_model`.
 
 When the published model was trained, the Optuna searches of `cox_net` and `deepsurv` and DeepSurv's network weights were not seeded, and the XGBSE booster used XGBoost's default seed (0). Seed 42 was set in these scripts afterwards, so re-running them will not give exactly the published elastic-net Cox, XGBSE and DeepSurv models.
-
-## Input data format
-
-The scripts read a data dictionary and CSV files of patients. Missing values are empty cells, follow-up is in months, and every predictor is numeric (binary variables 0/1, categories as integer codes).
-
-**Data dictionary** (`data_prep.py --dict_data`): one row per variable, with the columns `FieldShortName` (name of the column in the patient files), `Category` and `RecordedAtBaseline` (`Yes`/`No`). The candidate predictors are the variables with `RecordedAtBaseline` = `Yes`, except `center` and the categories `genetic_tests`, `comorbidity_type`, `drug_type` and `comorbidity_info`.
-
-**Development cohort** (`data_prep.py --btc_os_data`): one row per patient with
-- `patient number`: numeric and unique, and listed in the dictionary as a baseline variable;
-- `os`, the follow-up in months, and `death` (1 death, 0 censored);
-- the baseline variables of the dictionary. Three are needed by name: `location` (0 gallbladder, 1 intrahepatic, 2 distal, 3 proximal extrahepatic; becomes `location - Intrahepatic`), `surgery and start of cgi` (0 <6 months, 1 >6 months, 2 metastatic ab initio; becomes `surgery and start of cgi - Metastatic ab initio`) and `hbv/hcv` (dropped). `ps ecog` (0-3) and `ecog bin` (0 vs ≥1), if both present, are merged into `ps ecog`; `stent or biliary draige` (0 none, 1-3 → 1) and the single-site metastasis columns (`lung mets only`, `lymph mets only`, `peri mets only`, `liver mets only`, `bone mets only`, dropped) are optional.
-
-`data_prep.py` writes the training and test CSV files, with the columns `id`, the predictors, `tte` (months) and `event`.
-
-**Both cohorts** (`prepare_external.py --raw_data`): one file with the development patients (`coorte` = `training`) and the temporal patients (`coorte` = `validation`), with the columns above and, for every patient, `dob`, `sex` (numeric), `center`, `cgi start date` and `date of death or last fup` (`YYYY-MM-DD` or `DD/MM/YYYY`). The follow-up of the temporal patients is recomputed from the two dates. A temporal patient is removed if date of birth, sex, centre (upper/lower case and spaces ignored) and start date equal those of a development patient, or if the follow-up is missing or not positive. The predictors of the ensemble and the SENECA inputs (`neutrophils`, `ps ecog`, `locally advanced/metastatic` with 1 locally advanced and 2 metastatic, `ca199`, `cea`) must have the same names as in the development data.
-
-Some requirements of the code are not obvious from the file format:
-- The number of predictors of the ensemble, the union of the features of the four base learners, is the result of the selection, not an input: 10 in the paper, and any number from 1 upwards is accepted (tested with 10 and 24). `prepare_external.py` and the Cox benchmark use whatever list the registered ensemble holds.
-- The temporal cohort is recoded only for ECOG and stent/drainage, so the predictors of the ensemble must be columns that `data_prep.py` passes through unchanged; the derived `location - Intrahepatic` and `surgery and start of cgi - Metastatic ab initio` cannot be among them.
-- The five SENECA inputs must be candidate predictors of the development data as well: `threshold_sensitivity.py` reads them from the training set.
-- The R scripts evaluate the calibration at 6 and 18 months within deciles of predicted risk, and stop ("no points selected for one or more curves") if a decile has no patient followed beyond 18 months; the temporal cohort needs enough follow-up and patients.
-- `threshold_sensitivity.py` compares its rows at k = 15 and k = 33 with the main analysis and stops if they differ; this also happens when a risk group has no deaths, because the hazard ratio is then infinite (small cohorts).
-- MLflow creates its store (`MLFLOW_TRACKING_URI=file:<folder>`) itself; a folder created beforehand makes it stop with "Could not find experiment with ID 0".
 
 ## Software
 
