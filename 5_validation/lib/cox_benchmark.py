@@ -1,6 +1,6 @@
 """Unpenalised Cox benchmark: loading the fitted model and its coefficient table.
 
-The benchmark is a Cox proportional hazards model on the ten predictors of
+The benchmark is a Cox proportional hazards model on the predictors of
 the ensemble, fitted once on the training set by fit_cox_benchmark.py;
 generate_predictions.py and compute_metrics.py only load it. CoxBenchmarkModel
 gives it the interface of the registered ensemble (predict and

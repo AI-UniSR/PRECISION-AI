@@ -36,7 +36,7 @@ The helper modules `xgboost_survival_model.py`, `xgbse_pipeline_wrapper.py` and 
 `data_prep.py` is run again to rebuild the same training and test sets.
 
 1. `prepare_external.py`: from the 779 temporal-cohort patients, removes the 80 also present in the development cohort (same date of birth, sex, centre and treatment start date) and 1 with zero follow-up, leaving 698, and keeps the ensemble's predictors and the SENECA inputs. Its report also counts the temporal patients whose treatment started before, within or after the development cohort's treatment-start window and those from centres absent from the development cohort (Methods, Study cohort).
-2. `fit_cox_benchmark.py`: an unpenalised Cox model on the ensemble's ten predictors, fitted on the training set with the same preprocessing as the ensemble's Cox learner. It differs from the ensemble only in the modelling method.
+2. `fit_cox_benchmark.py`: an unpenalised Cox model on the ensemble's predictors (ten in the paper), fitted on the training set with the same preprocessing as the ensemble's Cox learner. It differs from the ensemble only in the modelling method.
 3. `generate_predictions.py`: risk scores and survival probabilities of the ensemble and of the Cox benchmark for the internal test set and the temporal cohort, the SENECA score, and the training risk scores used for the risk-group cutoffs.
 4. `compute_metrics.py`: Harrell's C, Uno's C (τ = 24 months), time-dependent AUC and Brier score at 6, 12, 18 and 24 months, IBS, with the censoring distribution of the IPCW weights estimated by Kaplan–Meier in the cohort or bootstrap resample being evaluated (definitions in `lib/survival_metrics.py`); 95% CIs from 1000 event-stratified bootstrap resamples, shared by all models compared on a cohort so that differences are paired (`lib/bootstrap.py`); the SENECA comparison on the 579 patients with all five SENECA inputs; risk groups at the 15th/85th (and 33rd/67th) percentiles of the training risk scores with Kaplan–Meier summaries, log-rank test, pairwise hazard ratios, PPV at 6 months and NPV at 18 months; completeness of the inputs and C-indices by completeness.
 5. `threshold_sensitivity.py`: the risk-group analysis at other percentile cutoffs (k/100 − k, k = 5 to 33), on the SENECA complete cases (ensemble vs SENECA) and on the full cohort (ensemble). It reuses the resamples of `compute_metrics.py` (same `--n_bootstrap`) and stops unless k = 15 and k = 33 reproduce the main analysis.
@@ -58,9 +58,9 @@ The helper modules `xgboost_survival_model.py`, `xgbse_pipeline_wrapper.py` and 
 | Tables S7, S8, S9 | `compute_metrics.py` | `temporal_patient_completeness.csv`, `temporal_ml_completeness_c_indices.csv`, `temporal_centre_feature_missingness.csv` |
 | Fig. S2 | `2_feature_selection/feature_selection.py` | `stability_scores.csv` |
 | Fig. S3 | `publication_figures.R` | `ipcw_risk_stratified_*`, `predicted_risk_*` |
-| Cox benchmark, cutoff sensitivity | `fit_cox_benchmark.py`, `compute_metrics.py`, `threshold_sensitivity.py` → `publication_tables.R` | `ensemble_vs_cox`, `cox_benchmark_coefficients`, `cutoff_sensitivity_temporal_full` |
+| Tables S10, S11 | `fit_cox_benchmark.py`, `compute_metrics.py`, `threshold_sensitivity.py` → `publication_tables.R` | `ensemble_vs_cox` (S10, Cox benchmark), `cutoff_sensitivity_temporal_full` (S11) |
 
-Table 1, Tables S1, S3, S5 and S6, Figs. S1, S4 and S5 and Figures 1 and 5 were prepared outside these pipelines; the published figures were assembled from the panels above. Table S9 was de-identified by hand: pipeline outputs contain patient-level rows and real centre names. Tables 2–4 and S4 as printed show the ensemble (and SENECA) rows only: the Cox benchmark rows that `publication_tables.R` adds to them were removed by hand, and the benchmark is reported in Table S11 (temporal validation cohort). The summary CSVs are written with four decimals, as in the run behind the paper; the published three-decimal values are rounded from them.
+Table 1, Tables S1, S3, S5 and S6, Figs. S1, S4 and S5 and Figures 1 and 5 were prepared outside these pipelines; the published figures were assembled from the panels above. Table S9 was de-identified by hand: pipeline outputs contain patient-level rows and real centre names. Tables 2–4 and S4 as printed show the ensemble (and SENECA) rows only: the Cox benchmark rows that `publication_tables.R` adds to them were removed by hand, and the benchmark is reported in Table S10 (temporal validation cohort). The table of the benchmark's hazard ratios (`cox_benchmark_coefficients`) is written by `publication_tables.R` but is not part of the manuscript. The summary CSVs are written with four decimals, as in the run behind the paper; the published three-decimal values are rounded from them.
 
 ## Running
 
@@ -69,6 +69,29 @@ Each step is a command-line program (`--help` lists the arguments); the numeric 
 The ensemble is passed between steps through an MLflow model registry as `models:/<name>/<version>`. Outside Azure ML, set `MLFLOW_TRACKING_URI` to a local store (e.g. `file:./mlruns`), where `evaluate_models.py` registers it as `ensemble_survival_model`.
 
 When the published model was trained, the Optuna searches of `cox_net` and `deepsurv` and DeepSurv's network weights were not seeded, and the XGBSE booster used XGBoost's default seed (0). Seed 42 was set in these scripts afterwards, so re-running them will not give exactly the published elastic-net Cox, XGBSE and DeepSurv models.
+
+## Input data format
+
+The scripts read a data dictionary and CSV files of patients. Missing values are empty cells, follow-up is in months, and every predictor is numeric (binary variables 0/1, categories as integer codes).
+
+**Data dictionary** (`data_prep.py --dict_data`): one row per variable, with the columns `FieldShortName` (name of the column in the patient files), `Category` and `RecordedAtBaseline` (`Yes`/`No`). The candidate predictors are the variables with `RecordedAtBaseline` = `Yes`, except `center` and the categories `genetic_tests`, `comorbidity_type`, `drug_type` and `comorbidity_info`.
+
+**Development cohort** (`data_prep.py --btc_os_data`): one row per patient with
+- `patient number`: numeric and unique, and listed in the dictionary as a baseline variable;
+- `os`, the follow-up in months, and `death` (1 death, 0 censored);
+- the baseline variables of the dictionary. Three are needed by name: `location` (0 gallbladder, 1 intrahepatic, 2 distal, 3 proximal extrahepatic; becomes `location - Intrahepatic`), `surgery and start of cgi` (0 <6 months, 1 >6 months, 2 metastatic ab initio; becomes `surgery and start of cgi - Metastatic ab initio`) and `hbv/hcv` (dropped). `ps ecog` (0-3) and `ecog bin` (0 vs ≥1), if both present, are merged into `ps ecog`; `stent or biliary draige` (0 none, 1-3 → 1) and the single-site metastasis columns (`lung mets only`, `lymph mets only`, `peri mets only`, `liver mets only`, `bone mets only`, dropped) are optional.
+
+`data_prep.py` writes the training and test CSV files, with the columns `id`, the predictors, `tte` (months) and `event`.
+
+**Both cohorts** (`prepare_external.py --raw_data`): one file with the development patients (`coorte` = `training`) and the temporal patients (`coorte` = `validation`), with the columns above and, for every patient, `dob`, `sex` (numeric), `center`, `cgi start date` and `date of death or last fup` (`YYYY-MM-DD` or `DD/MM/YYYY`). The follow-up of the temporal patients is recomputed from the two dates. A temporal patient is removed if date of birth, sex, centre (upper/lower case and spaces ignored) and start date equal those of a development patient, or if the follow-up is missing or not positive. The predictors of the ensemble and the SENECA inputs (`neutrophils`, `ps ecog`, `locally advanced/metastatic` with 1 locally advanced and 2 metastatic, `ca199`, `cea`) must have the same names as in the development data.
+
+Some requirements of the code are not obvious from the file format:
+- The number of predictors of the ensemble, the union of the features of the four base learners, is the result of the selection, not an input: 10 in the paper, and any number from 1 upwards is accepted (tested with 10 and 24). `prepare_external.py` and the Cox benchmark use whatever list the registered ensemble holds.
+- The temporal cohort is recoded only for ECOG and stent/drainage, so the predictors of the ensemble must be columns that `data_prep.py` passes through unchanged; the derived `location - Intrahepatic` and `surgery and start of cgi - Metastatic ab initio` cannot be among them.
+- The five SENECA inputs must be candidate predictors of the development data as well: `threshold_sensitivity.py` reads them from the training set.
+- The R scripts evaluate the calibration at 6 and 18 months within deciles of predicted risk, and stop ("no points selected for one or more curves") if a decile has no patient followed beyond 18 months; the temporal cohort needs enough follow-up and patients.
+- `threshold_sensitivity.py` compares its rows at k = 15 and k = 33 with the main analysis and stops if they differ; this also happens when a risk group has no deaths, because the hazard ratio is then infinite (small cohorts).
+- MLflow creates its store (`MLFLOW_TRACKING_URI=file:<folder>`) itself; a folder created beforehand makes it stop with "Could not find experiment with ID 0".
 
 ## Software
 

@@ -1,4 +1,4 @@
-"""Unpenalised Cox benchmark on the ten predictors of the ensemble.
+"""Unpenalised Cox benchmark on the predictors of the ensemble.
 
 The benchmark differs from the ensemble only in the modelling method:
 
@@ -8,7 +8,7 @@ The benchmark differs from the ensemble only in the modelling method:
 - predictors: the union of the base learners' features (selected_features.json);
 - preprocessing: the ensemble's 'cox' learner (IterativeImputer ->
   RobustScaler -> CoxPHSurvivalAnalysis, alpha = 0) is cloned, unfitted, and
-  refitted here on all ten predictors.
+  refitted here on all its predictors.
 
 The ensemble-Cox difference therefore measures the effect of the modelling
 method; the ensemble-SENECA difference also includes the choice of
