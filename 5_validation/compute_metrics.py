@@ -101,15 +101,15 @@ def _load_data(path: str) -> pd.DataFrame:
 
 
 def _load_selected_features(model_name: str, model_version: str) -> List[str]:
-    """The ten predictors of the ensemble (union of the base learners' features)."""
+    """The predictors of the ensemble (union of the base learners' features)."""
     path = mlflow.artifacts.download_artifacts(
         artifact_uri=f"models:/{model_name}/{model_version}/artifacts/selected_features.json")
     with open(path) as f:
         selected = json.load(f)
     if isinstance(selected, dict):
         selected = sorted({feature for features in selected.values() for feature in features})
-    if not isinstance(selected, list) or len(selected) != 10:
-        raise ValueError("Expected selected_features.json to resolve to exactly 10 model features.")
+    if not isinstance(selected, list) or len(selected) < 1:
+        raise ValueError("Expected selected_features.json to resolve to a non-empty list of model features.")
     return selected
 
 
@@ -164,7 +164,7 @@ def _cohort_characteristics(cohorts: Dict[str, pd.DataFrame]) -> Dict:
 def _temporal_missingness_tables(df: pd.DataFrame, model_features: List[str]):
     """Completeness of the ensemble's and SENECA's inputs in the temporal cohort,
     before imputation: patients by number of missing inputs, missingness by
-    feature and by centre, and the mask of patients with all ten predictors."""
+    feature and by centre, and the mask of patients with all predictors of the ensemble."""
     ecog = "ecog bin" if "ecog bin" in df.columns else "ps ecog"
     feature_sets = {"ml_model_10": model_features,
                     "seneca_5": ["neutrophils", ecog, "locally advanced/metastatic", "ca199", "cea"]}
@@ -438,7 +438,7 @@ def _run_bootstrap(df, y_train, n_iter, surv_matrix=None, grid=None, horizon=Non
 
     With include_seneca the cohort is restricted to the SENECA complete cases.
     With ml_complete_mask, Harrell's and Uno's C are also computed, on every
-    resample, in the patients with all ten predictors observed and in those
+    resample, in the patients with all predictors observed and in those
     with at least one imputed. surv_matrix rows must match the rows of df.
     """
     if include_seneca:

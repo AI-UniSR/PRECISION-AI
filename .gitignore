@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 mlruns/
 outputs/
+
+# Local material, not part of the code
+test_pipeline/
+Liver Risultati/

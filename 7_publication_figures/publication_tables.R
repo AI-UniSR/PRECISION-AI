@@ -94,7 +94,7 @@ cox_label <- "Cox PH (benchmark)"
 diff_cox_label <- "Difference (ML − Cox PH)"
 cox_def_note <- paste(
   "Cox PH = unpenalised Cox proportional hazards model fitted on the same training patients, the same",
-  "10 predictors and the same preprocessing (iterative imputation and robust scaling fitted on the",
+  "predictors and the same preprocessing (iterative imputation and robust scaling fitted on the",
   "training set) as the ML ensemble.")
 cox_note <- paste(cox_def_note, "Differences are ML ensemble minus Cox PH with 95% CIs from the paired",
                   "bootstrap (same resamples).")
