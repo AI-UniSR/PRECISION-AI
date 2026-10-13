@@ -2,7 +2,7 @@
 
 Analysis code for the paper *Development and Temporal Validation of an Artificial Intelligence–Based Ensemble Model for Overall Survival Stratification in Advanced Biliary Tract Cancer Treated with First-Line Cisplatin, Gemcitabine, and Durvalumab*.
 
-[![DOI](https://zenodo.org/badge/1279256693.svg)](https://doi.org/10.5281/zenodo.20832284)
+**DOI:** [10.5281/zenodo.23336728](https://doi.org/10.5281/zenodo.23336728)
 
 The analyses ran as two Azure Machine Learning pipelines: one for model development and internal testing, one for temporal validation. This repository holds the scripts of both pipelines, so that each step of the Methods can be checked against the code. Patient-level data cannot be shared, so the scripts cannot be run as they are; the format of the input is described in [Input data format](#input-data-format), the order of the steps and their settings below and in each script's header. Exploratory steps that produced no reported result, the Azure job definitions and the checks that compared each run with our reference outputs are not included.
 
@@ -154,4 +154,4 @@ Python 3.9. The registered model was logged with scikit-learn 1.5.1, scikit-surv
 
 ## Archive and citation
 
-The repository is archived on Zenodo. The DOI [10.5281/zenodo.20832284](https://doi.org/10.5281/zenodo.20832284) refers to all versions and resolves to the latest one. The code of the submitted manuscript is release v1.1.0, DOI [10.5281/zenodo.23268671](https://doi.org/10.5281/zenodo.23268671). Release v1.0.0 (DOI 10.5281/zenodo.20832285) predates the revision of the code for the manuscript and does not reproduce its numbers.
+The repository is archived on Zenodo. The DOI [10.5281/zenodo.20832284](https://doi.org/10.5281/zenodo.20832284) refers to all versions and resolves to the latest one. The code of the submitted manuscript is release v1.1.0, DOI [10.5281/zenodo.23336728](https://doi.org/10.5281/zenodo.23336728). Release v1.0.0 (DOI 10.5281/zenodo.20832285) predates the revision of the code for the manuscript and does not reproduce its numbers.
