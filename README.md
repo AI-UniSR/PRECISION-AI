@@ -2,7 +2,7 @@
 
 Analysis code for the paper *Development and Temporal Validation of an Artificial Intelligence–Based Ensemble Model for Overall Survival Stratification in Advanced Biliary Tract Cancer Treated with First-Line Cisplatin, Gemcitabine, and Durvalumab*.
 
-**DOI:** [10.5281/zenodo.23336728](https://doi.org/10.5281/zenodo.23336728)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23336728.svg)](https://doi.org/10.5281/zenodo.23336728)
 
 The analyses ran as two Azure Machine Learning pipelines: one for model development and internal testing, one for temporal validation. This repository holds the scripts of both pipelines, so that each step of the Methods can be checked against the code. Patient-level data cannot be shared, so the scripts cannot be run as they are; the format of the input is described in [Input data format](#input-data-format), the order of the steps and their settings below and in each script's header. Exploratory steps that produced no reported result, the Azure job definitions and the checks that compared each run with our reference outputs are not included.
 
